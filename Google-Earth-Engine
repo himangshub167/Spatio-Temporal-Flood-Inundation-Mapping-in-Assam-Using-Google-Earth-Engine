@@ -1,0 +1,182 @@
+var stateShapefile = ee.FeatureCollection('users/himangshub167/Districts__Assam');
+var dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation');
+
+var upperValleyList = ['CHARAIDEO', 'DHEMAJI', 'DIBRUGARH', 'GOLAGHAT', 'JORHAT', 'LAKHIMPUR', 'SONITPUR', 'MAJULI', 'SIBSAGAR', 'BISWANATH', 'TINSUKIA'];
+var lowerValleyList = ['BAKSA', 'BARPETA', 'BONGAIGAON', 'CHIRANG', 'DARRANG', 'DHUBRI', 'GOALPARA', 'HOJAI', 'KAMRUP', 'KAMRUP METRO', 'KOKRAJHAR', 'MORIGAON', 'NAGAON', 'NALBARI', 'SOUTH SALMARA - MANKACHAR', 'UDALGURI'];
+var hillRegionList = ['DIMA HASAO', 'KARBI ANGLONG', 'WEST KARBI ANGLONG'];
+var barakValleyList = ['CACHAR', 'HAILAKANDI', 'KARIMGANJ'];
+
+var divisions = {
+  'UPPER BRAHMAPUTRA VALLEY': stateShapefile.filter(ee.Filter.inList('District', upperValleyList)),
+  'LOWER BRAHMAPUTRA VALLEY': stateShapefile.filter(ee.Filter.inList('District', lowerValleyList)),
+  'HILL REGION': stateShapefile.filter(ee.Filter.inList('District', hillRegionList)),
+  'BARAK VALLEY': stateShapefile.filter(ee.Filter.inList('District', barakValleyList))
+};
+
+function getS2PermanentWater(roi) {
+  var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+    .filterBounds(roi)
+    .filter(ee.Filter.or(ee.Filter.date('2024-01-01', '2024-04-30'), ee.Filter.date('2024-09-01', '2024-12-31')))
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 15));
+  var mndwi = s2.median().normalizedDifference(['B3', 'B11']);
+  return mndwi.gt(0.1).updateMask(mndwi.gt(0.1)).clip(roi);
+}
+
+function getFloodInundation(yearStr, roi, baselineWater) {
+  var slope = ee.Terrain.slope(dem);
+  var s1 = ee.ImageCollection('COPERNICUS/S1_GRD').filterBounds(roi)
+    .filterDate(yearStr + '-05-20', yearStr + '-09-20')
+    .filter(ee.Filter.eq('instrumentMode', 'IW'));
+  var composite = s1.median().clip(roi);
+  var flood = composite.select('VH').lt(-22).or(composite.select('VV').lt(-10));
+  return flood.focal_median(30, 'circle', 'meters').updateMask(flood).updateMask(baselineWater.unmask().not()).updateMask(slope.lt(10));
+}
+
+function reclassifyDW(image) {
+  var fromList = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+  var toList   = [1, 2, 2, 2, 3, 3, 4, 5, 5]; 
+  return image.remap(fromList, toList);
+}
+
+var headerFrame = ui.Panel({
+  style: {position: 'top-center', padding: '2px 10px', backgroundColor: 'rgba(255, 255, 255, 0.95)', width: '850px', border: '1px solid #00008B'}
+});
+
+var title1 = ui.Label('SPATIO-TEMPORAL FLOOD INUNDATION MAPPING IN ASSAM', {
+  fontWeight: 'bold', fontSize: '20px', color: '#00008B', textAlign: 'center', stretch: 'horizontal', margin: '2px 0'});
+
+var title2 = ui.Label('SPECIAL EMPHASIS ON CROPLAND & BUILT-UP AREAS', {
+  fontWeight: 'bold', fontSize: '18px', color: '#CC0000', textAlign: 'center', stretch: 'horizontal', margin: '2px 0'});
+
+var dynamicBar = ui.Panel({
+  layout: ui.Panel.Layout.flow('horizontal'), 
+  style: {width: '100%', textAlign: 'center', backgroundColor: '#F4F4F4', margin: '4px 0'}
+});
+var divLabel = ui.Label('DIVISION: [SELECT]', {fontSize: '15px', fontWeight: 'bold', margin: '0 15px'});
+var yearLabel = ui.Label('YEAR: [SELECT]', {fontSize: '15px', fontWeight: 'bold', margin: '0 15px'});
+
+dynamicBar.add(ui.Label('',{stretch:'horizontal'})).add(divLabel).add(yearLabel).add(ui.Label('',{stretch:'horizontal'}));
+headerFrame.add(title1).add(title2).add(dynamicBar);
+Map.add(headerFrame);
+
+var legendPanel = ui.Panel({
+  style: {position: 'bottom-left', padding: '10px', width: '220px', border: '2px solid #333', backgroundColor: 'rgba(255, 255, 255, 0.95)'}
+});
+legendPanel.add(ui.Label('MAP LEGEND', {fontWeight: 'bold', fontSize: '16px', margin: '0 0 10px 0', textAlign: 'center', stretch: 'horizontal'}));
+
+var makeLegendRow = function(color, name) {
+  var colorBox = ui.Label({style: {backgroundColor: color, padding: '10px', margin: '0 8px 4px 0', border: '1px solid black'}});
+  var description = ui.Label({value: name, style: {margin: '2px 0 0 0', fontSize: '13px', fontWeight: 'bold'}});
+  return ui.Panel({widgets: [colorBox, description], layout: ui.Panel.Layout.Flow('horizontal')});
+};
+
+legendPanel.add(makeLegendRow('#FF0000', 'Flood Inundation'))
+           .add(makeLegendRow('#00FFFF', 'Permanent Water'))
+           .add(makeLegendRow('#228B22', 'Vegetation'))
+           .add(makeLegendRow('#FFFF00', 'Cropland'))
+           .add(makeLegendRow('#FF69B4', 'Built-Up Area'))
+           .add(makeLegendRow('#D2B48C', 'Barren Land'));
+Map.add(legendPanel);
+
+var sidePanel = ui.Panel({style: {width: '320px', padding: '5px', position: 'bottom-right', border: '1px solid #AAAAAA'}});
+var yearItems = ['2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2016-2020 (Composite)', '2021-2025 (Composite)'];
+
+var divSelect = ui.Select({items: Object.keys(divisions), value: 'UPPER BRAHMAPUTRA VALLEY', style: {stretch: 'horizontal'}});
+var yearSelect = ui.Select({items: yearItems, value: '2024', style: {stretch: 'horizontal'}});
+
+sidePanel.add(ui.Label('Select Division:', {fontSize: '14px', fontWeight: 'bold'})).add(divSelect);
+sidePanel.add(ui.Label('Select Year:', {fontSize: '14px', fontWeight: 'bold'})).add(yearSelect);
+
+var statsContainer = ui.Panel({style: {padding: '8px', backgroundColor: '#FFFFFF', border: '2px solid #CC0000', margin: '5px 0'}});
+var boldRedStyle = {fontSize: '14px', fontWeight: 'bold', color: '#CC0000', margin: '4px 0'};
+
+var tArea = ui.Label('Total Area: --', boldRedStyle);
+var fArea = ui.Label('Flooded Area: --', boldRedStyle);
+var fPerc = ui.Label('Flood Percentage: --', boldRedStyle);
+var cArea = ui.Label('Cropland Flooded: --', boldRedStyle);
+var bArea = ui.Label('Built-Up Flooded: --', boldRedStyle);
+var avgDepth = ui.Label('Avg Flood Depth: --', boldRedStyle);
+
+statsContainer.add(tArea).add(fArea).add(fPerc).add(cArea).add(bArea).add(avgDepth);
+sidePanel.add(statsContainer);
+
+var runButton = ui.Button({
+  label: 'UPDATE ANALYTICS',
+  style: {stretch: 'horizontal', fontWeight: 'bold'},
+  onClick: function() {
+    var divName = divSelect.getValue();
+    var period = yearSelect.getValue().split(' ')[0]; 
+    var roi = divisions[divName];
+    var roiGeom = roi.geometry();
+    Map.layers().reset();
+    
+    divLabel.setValue('DIVISION: ' + divName);
+    yearLabel.setValue('YEAR: ' + period);
+    fArea.setValue('Processing calculation...');
+
+    var checkYear = period.indexOf('-') > -1 ? parseInt(period.split('-')[0]) : parseInt(period);
+    var targetLulcYear = (checkYear <= 2020) ? '2018' : '2023';
+    
+    var lulcRaw = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1').filterBounds(roiGeom).filterDate(targetLulcYear + '-01-01', targetLulcYear + '-12-31').select('label').mode().clip(roiGeom);
+    var activeLULC = reclassifyDW(lulcRaw);
+    var lulcPalette = ['#00FFFF', '#228B22', '#FFFF00', '#FF69B4', '#D2B48C'];
+
+    var permWater = getS2PermanentWater(roiGeom);
+    var floodLayer;
+
+    if (period.indexOf('-') > -1) {
+        var range = period.split('-');
+        var startYear = ee.Number.parse(range[0]);
+        var endYear = ee.Number.parse(range[1]);
+        var years = ee.List.sequence(startYear, endYear);
+        var floodCol = years.map(function(y) {
+          var yrStr = ee.Number(y).format('%d');
+          var s1 = ee.ImageCollection('COPERNICUS/S1_GRD').filterBounds(roiGeom).filterDate(yrStr.cat('-05-20'), yrStr.cat('-09-20')).filter(ee.Filter.eq('instrumentMode', 'IW'));
+          var flood = s1.median().select('VH').lt(-22).or(s1.median().select('VV').lt(-10));
+          return flood.focal_median(30, 'circle', 'meters').updateMask(flood).unmask(0);
+        });
+        floodLayer = ee.ImageCollection(floodCol).max().updateMask(ee.ImageCollection(floodCol).max().gt(0)).updateMask(permWater.unmask().not());
+    } else {
+        floodLayer = getFloodInundation(period, roiGeom, permWater);
+    }
+
+    var shoreline = floodLayer.focal_max(30, 'circle', 'meters').subtract(floodLayer);
+    var wseValue = dem.updateMask(shoreline).reduceRegion({
+      reducer: ee.Reducer.median(), 
+      geometry: roiGeom, 
+      scale: 30, 
+      maxPixels: 1e13
+    }).getNumber('elevation');
+    
+    var depthImg = ee.Image.constant(wseValue).subtract(dem).updateMask(floodLayer).clamp(0, 15);
+
+    Map.addLayer(activeLULC, {min: 1, max: 5, palette: lulcPalette}, 'LULC Baseline', false);
+    Map.addLayer(permWater, {palette: '#00FFFF'}, 'Permanent Water');
+    Map.addLayer(floodLayer, {palette: '#FF0000'}, 'Flood Inundation');
+    Map.addLayer(ee.Image().paint(roi, 0, 2), {palette: '#000000'}, 'Boundary');
+
+    var areaImg = ee.Image.pixelArea().divide(1e6);
+    var statsDict = ee.Dictionary({
+      total: roiGeom.area().divide(1e6),
+      flood: areaImg.updateMask(floodLayer).reduceRegion({reducer: ee.Reducer.sum(), geometry: roiGeom, scale: 100, maxPixels: 1e13}).get('area'),
+      crop: areaImg.updateMask(floodLayer).updateMask(activeLULC.eq(3)).reduceRegion({reducer: ee.Reducer.sum(), geometry: roiGeom, scale: 100, maxPixels: 1e13}).get('area'),
+      built: areaImg.updateMask(floodLayer).updateMask(activeLULC.eq(4)).reduceRegion({reducer: ee.Reducer.sum(), geometry: roiGeom, scale: 100, maxPixels: 1e13}).get('area'),
+      avgD: depthImg.reduceRegion({reducer: ee.Reducer.mean(), geometry: roiGeom, scale: 30, maxPixels: 1e13}).get('constant')
+    });
+
+    statsDict.evaluate(function(val) {
+      if (!val) return;
+      tArea.setValue('Total Area: ' + (val.total || 0).toFixed(1) + ' Km²');
+      fArea.setValue('Flooded Area: ' + (val.flood || 0).toFixed(1) + ' Km²');
+      fPerc.setValue('Flood Percentage: ' + ((val.flood/val.total)*100).toFixed(2) + ' %');
+      cArea.setValue('Cropland Flooded: ' + (val.crop || 0).toFixed(1) + ' Km²');
+      bArea.setValue('Built-Up Flooded: ' + (val.built || 0).toFixed(1) + ' Km²');
+      avgDepth.setValue('Avg Flood Depth: ' + (val.avgD ? val.avgD.toFixed(2) : 0) + ' m');
+    });
+    Map.centerObject(roi, 7);
+  }
+});
+
+sidePanel.add(runButton);
+Map.add(sidePanel);
+Map.setOptions('SATELLITE');
