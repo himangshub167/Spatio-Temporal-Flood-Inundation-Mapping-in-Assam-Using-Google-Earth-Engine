@@ -1,11 +1,14 @@
+// STEP 1: INITIALIZATION - ASSETS & ELEVATION DATA
 var stateShapefile = ee.FeatureCollection('users/himangshub167/Districts__Assam');
 var dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation');
 
+// STEP 2: REGIONAL CATEGORIZATION - DEFINING DISTRICT LISTS
 var upperValleyList = ['CHARAIDEO', 'DHEMAJI', 'DIBRUGARH', 'GOLAGHAT', 'JORHAT', 'LAKHIMPUR', 'SONITPUR', 'MAJULI', 'SIBSAGAR', 'BISWANATH', 'TINSUKIA'];
 var lowerValleyList = ['BAKSA', 'BARPETA', 'BONGAIGAON', 'CHIRANG', 'DARRANG', 'DHUBRI', 'GOALPARA', 'HOJAI', 'KAMRUP', 'KAMRUP METRO', 'KOKRAJHAR', 'MORIGAON', 'NAGAON', 'NALBARI', 'SOUTH SALMARA - MANKACHAR', 'UDALGURI'];
 var hillRegionList = ['DIMA HASAO', 'KARBI ANGLONG', 'WEST KARBI ANGLONG'];
 var barakValleyList = ['CACHAR', 'HAILAKANDI', 'KARIMGANJ'];
 
+// STEP 3: REGIONAL CATEGORIZATION - CREATING DIVISION DICTIONARY
 var divisions = {
   'UPPER BRAHMAPUTRA VALLEY': stateShapefile.filter(ee.Filter.inList('District', upperValleyList)),
   'LOWER BRAHMAPUTRA VALLEY': stateShapefile.filter(ee.Filter.inList('District', lowerValleyList)),
@@ -13,6 +16,7 @@ var divisions = {
   'BARAK VALLEY': stateShapefile.filter(ee.Filter.inList('District', barakValleyList))
 };
 
+// STEP 4: CORE FUNCTION - EXTRACT SENTINEL-2 PERMANENT WATER
 function getS2PermanentWater(roi) {
   var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
     .filterBounds(roi)
@@ -22,6 +26,7 @@ function getS2PermanentWater(roi) {
   return mndwi.gt(0.1).updateMask(mndwi.gt(0.1)).clip(roi);
 }
 
+// STEP 5: CORE FUNCTION - EXTRACT SENTINEL-1 FLOOD INUNDATION
 function getFloodInundation(yearStr, roi, baselineWater) {
   var slope = ee.Terrain.slope(dem);
   var s1 = ee.ImageCollection('COPERNICUS/S1_GRD').filterBounds(roi)
@@ -32,12 +37,14 @@ function getFloodInundation(yearStr, roi, baselineWater) {
   return flood.focal_median(30, 'circle', 'meters').updateMask(flood).updateMask(baselineWater.unmask().not()).updateMask(slope.lt(10));
 }
 
+// STEP 6: CORE FUNCTION - RECLASSIFY DYNAMIC WORLD LULC
 function reclassifyDW(image) {
   var fromList = [0, 1, 2, 3, 4, 5, 6, 7, 8];
   var toList   = [1, 2, 2, 2, 3, 3, 4, 5, 5]; 
   return image.remap(fromList, toList);
 }
 
+// STEP 7: UI SETUP - CREATE MAIN HEADER & TITLES
 var headerFrame = ui.Panel({
   style: {position: 'top-center', padding: '2px 10px', backgroundColor: 'rgba(255, 255, 255, 0.95)', width: '850px', border: '1px solid #00008B'}
 });
@@ -48,6 +55,7 @@ var title1 = ui.Label('SPATIO-TEMPORAL FLOOD INUNDATION MAPPING IN ASSAM', {
 var title2 = ui.Label('SPECIAL EMPHASIS ON CROPLAND & BUILT-UP AREAS', {
   fontWeight: 'bold', fontSize: '18px', color: '#CC0000', textAlign: 'center', stretch: 'horizontal', margin: '2px 0'});
 
+// STEP 8: UI SETUP - DYNAMIC SELECTION TRACKER BAR
 var dynamicBar = ui.Panel({
   layout: ui.Panel.Layout.flow('horizontal'), 
   style: {width: '100%', textAlign: 'center', backgroundColor: '#F4F4F4', margin: '4px 0'}
@@ -59,6 +67,7 @@ dynamicBar.add(ui.Label('',{stretch:'horizontal'})).add(divLabel).add(yearLabel)
 headerFrame.add(title1).add(title2).add(dynamicBar);
 Map.add(headerFrame);
 
+// STEP 9: UI SETUP - CONSTRUCT INTERACTIVE MAP LEGEND
 var legendPanel = ui.Panel({
   style: {position: 'bottom-left', padding: '10px', width: '220px', border: '2px solid #333', backgroundColor: 'rgba(255, 255, 255, 0.95)'}
 });
@@ -78,6 +87,7 @@ legendPanel.add(makeLegendRow('#FF0000', 'Flood Inundation'))
            .add(makeLegendRow('#D2B48C', 'Barren Land'));
 Map.add(legendPanel);
 
+// STEP 10: UI SETUP - SIDE PANEL & USER DROPDOWN SELECTORS
 var sidePanel = ui.Panel({style: {width: '320px', padding: '5px', position: 'bottom-right', border: '1px solid #AAAAAA'}});
 var yearItems = ['2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2016-2020 (Composite)', '2021-2025 (Composite)'];
 
@@ -87,6 +97,7 @@ var yearSelect = ui.Select({items: yearItems, value: '2024', style: {stretch: 'h
 sidePanel.add(ui.Label('Select Division:', {fontSize: '14px', fontWeight: 'bold'})).add(divSelect);
 sidePanel.add(ui.Label('Select Year:', {fontSize: '14px', fontWeight: 'bold'})).add(yearSelect);
 
+// STEP 11: UI SETUP - INITIALIZE STATISTICAL OUTPUT CONTAINER
 var statsContainer = ui.Panel({style: {padding: '8px', backgroundColor: '#FFFFFF', border: '2px solid #CC0000', margin: '5px 0'}});
 var boldRedStyle = {fontSize: '14px', fontWeight: 'bold', color: '#CC0000', margin: '4px 0'};
 
@@ -100,6 +111,7 @@ var avgDepth = ui.Label('Avg Flood Depth: --', boldRedStyle);
 statsContainer.add(tArea).add(fArea).add(fPerc).add(cArea).add(bArea).add(avgDepth);
 sidePanel.add(statsContainer);
 
+// STEP 12: EXECUTION LOGIC - INITIALIZE RUN BUTTON & RESET UI STATE
 var runButton = ui.Button({
   label: 'UPDATE ANALYTICS',
   style: {stretch: 'horizontal', fontWeight: 'bold'},
@@ -114,6 +126,7 @@ var runButton = ui.Button({
     yearLabel.setValue('YEAR: ' + period);
     fArea.setValue('Processing calculation...');
 
+    // STEP 13: EXECUTION LOGIC - FETCH BASELINE LULC & PERMANENT WATER
     var checkYear = period.indexOf('-') > -1 ? parseInt(period.split('-')[0]) : parseInt(period);
     var targetLulcYear = (checkYear <= 2020) ? '2018' : '2023';
     
@@ -123,7 +136,8 @@ var runButton = ui.Button({
 
     var permWater = getS2PermanentWater(roiGeom);
     var floodLayer;
-
+    
+    // STEP 14: EXECUTION LOGIC - CALCULATE FLOOD LAYER (SINGLE YR VS COMPOSITE)
     if (period.indexOf('-') > -1) {
         var range = period.split('-');
         var startYear = ee.Number.parse(range[0]);
@@ -140,6 +154,7 @@ var runButton = ui.Button({
         floodLayer = getFloodInundation(period, roiGeom, permWater);
     }
 
+    // STEP 15: EXECUTION LOGIC - COMPUTE WATER SURFACE ELEVATION & DEPTH
     var shoreline = floodLayer.focal_max(30, 'circle', 'meters').subtract(floodLayer);
     var wseValue = dem.updateMask(shoreline).reduceRegion({
       reducer: ee.Reducer.median(), 
@@ -150,11 +165,13 @@ var runButton = ui.Button({
     
     var depthImg = ee.Image.constant(wseValue).subtract(dem).updateMask(floodLayer).clamp(0, 15);
 
+    // STEP 16: EXECUTION LOGIC - RENDER COMPUTED LAYERS ON MAP
     Map.addLayer(activeLULC, {min: 1, max: 5, palette: lulcPalette}, 'LULC Baseline', false);
     Map.addLayer(permWater, {palette: '#00FFFF'}, 'Permanent Water');
     Map.addLayer(floodLayer, {palette: '#FF0000'}, 'Flood Inundation');
     Map.addLayer(ee.Image().paint(roi, 0, 2), {palette: '#000000'}, 'Boundary');
 
+    // STEP 17: EXECUTION LOGIC - CALCULATE AREA STATISTICS VIA REDUCERS
     var areaImg = ee.Image.pixelArea().divide(1e6);
     var statsDict = ee.Dictionary({
       total: roiGeom.area().divide(1e6),
@@ -164,6 +181,7 @@ var runButton = ui.Button({
       avgD: depthImg.reduceRegion({reducer: ee.Reducer.mean(), geometry: roiGeom, scale: 30, maxPixels: 1e13}).get('constant')
     });
 
+    // STEP 18: EXECUTION LOGIC - ASYNC EVALUATION & UPDATING UI METRICS
     statsDict.evaluate(function(val) {
       if (!val) return;
       tArea.setValue('Total Area: ' + (val.total || 0).toFixed(1) + ' Km²');
@@ -173,10 +191,12 @@ var runButton = ui.Button({
       bArea.setValue('Built-Up Flooded: ' + (val.built || 0).toFixed(1) + ' Km²');
       avgDepth.setValue('Avg Flood Depth: ' + (val.avgD ? val.avgD.toFixed(2) : 0) + ' m');
     });
+    
     Map.centerObject(roi, 7);
   }
 });
 
+// STEP 19: FINAL ASSEMBLY - APPEND BUTTON, MOUNT UI & SET MAP PREFERENCES
 sidePanel.add(runButton);
 Map.add(sidePanel);
 Map.setOptions('SATELLITE');
